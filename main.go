@@ -34,6 +34,7 @@ type rootT struct {
 	SQLNullStr        bool
 	SQLNullInt        bool
 	Ptr               bool
+	StringValues      bool
 	TemplateFileNames cli.StringSlice
 	Aliases           cli.StringSlice
 }
@@ -119,6 +120,11 @@ func main() {
 				Usage:       "Adds a Null{{ENUM}} type for marshalling a nullable string value to sql.  If sqlnullint is specified too, it will be Null{{ENUM}}Str",
 				Destination: &argv.SQLNullStr,
 			},
+			&cli.BoolFlag{
+				Name:        "stringvals",
+				Usage:       "Instead of parsing for comments looks for string values and aliases",
+				Destination: &argv.StringValues,
+			},
 			&cli.StringSliceFlag{
 				Name:        "template",
 				Aliases:     []string{"t"},
@@ -173,6 +179,9 @@ func main() {
 				}
 				if argv.Ptr {
 					g.WithPtr()
+				}
+				if argv.StringValues {
+					g.WithStringValues()
 				}
 				if argv.SQLNullInt {
 					g.WithSQLNullInt()

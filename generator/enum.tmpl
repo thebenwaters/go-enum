@@ -28,7 +28,11 @@ const (
 
 {{ template "stringer" . }}
 
+{{ if .strvals }}
+var _{{.enum.Name}}Map = {{ mapifystr .enum }}
+{{ else }}
 var _{{.enum.Name}}Map = {{ mapify .enum }}
+{{ end }}
 
 // String implements the Stringer interface.
 func (x {{.enum.Name}}) String() string {
@@ -38,7 +42,11 @@ func (x {{.enum.Name}}) String() string {
 	return fmt.Sprintf("{{.enum.Name}}(%d)", x)
 }
 
+{{ if .strvals }}
+var _{{.enum.Name}}Value = {{ unmapifystr .enum .lowercase }}
+{{ else }}
 var _{{.enum.Name}}Value = {{ unmapify .enum .lowercase }}
+{{ end}}
 
 // Parse{{.enum.Name}} attempts to convert a string to a {{.enum.Name}}
 func Parse{{.enum.Name}}(name string) ({{.enum.Name}}, error) {
@@ -315,9 +323,19 @@ func (n *Null{{.enum.Name}}Str) UnmarshalJSON(b []byte) error {
 
 
 {{- define "stringer"}}
+{{ if .strvals }}
+const _{{.enum.Name}}Name = "{{ stringifyStringy .enum }}"
+{{ else }}
 const _{{.enum.Name}}Name = "{{ stringify .enum }}"
+{{ end }}
 
-{{ if .names }}var _{{.enum.Name}}Names = {{namify .enum}}
+{{ if .names }}
+{{ if .strvals }}
+var _{{.enum.Name}}Names = {{namifystr .enum}}
+{{ else }}
+var _{{.enum.Name}}Names = {{namify .enum}}
+{{ end }}
+
 
 // {{.enum.Name}}Names returns a list of possible string values of {{.enum.Name}}.
 func {{.enum.Name}}Names() []string {

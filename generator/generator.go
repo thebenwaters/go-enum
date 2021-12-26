@@ -49,6 +49,7 @@ type Generator struct {
 	sqlNullInt        bool
 	sqlNullStr        bool
 	ptr               bool
+	stringValues      bool
 }
 
 // Enum holds data for a discovered enum in the parsed source
@@ -66,6 +67,7 @@ type EnumValue struct {
 	PrefixedName string
 	Value        int
 	Comment      string
+	StringValue  string
 }
 
 // NewGenerator is a constructor method for creating a new Generator with default
@@ -87,8 +89,12 @@ func NewGenerator() *Generator {
 
 	funcs["stringify"] = Stringify
 	funcs["mapify"] = Mapify
+	funcs["mapifystr"] = MapifyString
 	funcs["unmapify"] = Unmapify
+	funcs["unmapifystr"] = UnmapifyString
 	funcs["namify"] = Namify
+	funcs["namifystr"] = NamifyString
+	funcs["stringifyStringy"] = StringValuesStringify
 
 	g.t.Funcs(funcs)
 
@@ -157,6 +163,11 @@ func (g *Generator) WithPrefix(prefix string) *Generator {
 // WithPtr adds a way to get a pointer value straight from the const value.
 func (g *Generator) WithPtr() *Generator {
 	g.ptr = true
+	return g
+}
+
+func (g *Generator) WithStringValues() *Generator {
+	g.stringValues = true
 	return g
 }
 
@@ -264,6 +275,7 @@ func (g *Generator) Generate(f *ast.File) ([]byte, error) {
 			"flag":       g.flag,
 			"names":      g.names,
 			"ptr":        g.ptr,
+			"strvals":    g.stringValues,
 			"sqlnullint": g.sqlNullInt,
 			"sqlnullstr": g.sqlNullStr,
 		}
@@ -320,55 +332,76 @@ func (g *Generator) parseEnum(ts *ast.TypeSpec) (*Enum, error) {
 		enum.Prefix = g.prefix + enum.Prefix
 	}
 
-	enumDecl := getEnumDeclFromComments(ts.Doc.List)
+	enumDecl := g.getEnumDeclFromComments(ts.Doc.List)
 
 	values := strings.Split(strings.TrimSuffix(strings.TrimPrefix(enumDecl, `ENUM(`), `)`), `,`)
 	data := 0
 	for _, value := range values {
-		var comment string
+		fmt.Println("parseEnum Value", value)
+		comment := ""
+		var ev EnumValue
+		fmt.Println("SV", g.stringValues)
 
-		// Trim and store comments
-		if strings.Contains(value, parseCommentPrefix) {
-			commentStartIndex := strings.Index(value, parseCommentPrefix)
-			comment = value[commentStartIndex+len(parseCommentPrefix):]
-			comment = strings.TrimSpace(unescapeComment(comment))
-			// value without comment
-			value = value[:commentStartIndex]
-		}
-
-		// Make sure to leave out any empty parts
-		if value != "" {
-			if strings.Contains(value, `=`) {
-				// Get the value specified and set the data to that value.
-				equalIndex := strings.Index(value, `=`)
-				dataVal := strings.TrimSpace(value[equalIndex+1:])
-				if dataVal != "" {
-					newData, err := strconv.ParseInt(dataVal, 10, 32)
-					if err != nil {
-						return nil, errors.Wrapf(err, "failed parsing the data part of enum value '%s'", value)
+		if !g.stringValues {
+			// Trim and store comments
+			if strings.Contains(value, parseCommentPrefix) {
+				commentStartIndex := strings.Index(value, parseCommentPrefix)
+				comment = value[commentStartIndex+len(parseCommentPrefix):]
+				comment = strings.TrimSpace(unescapeComment(comment))
+				// value without comment
+				value = value[:commentStartIndex]
+			}
+			// Make sure to leave out any empty parts
+			if value != "" {
+				if strings.Contains(value, `=`) {
+					// Get the value specified and set the data to that value.
+					equalIndex := strings.Index(value, `=`)
+					dataVal := strings.TrimSpace(value[equalIndex+1:])
+					if dataVal != "" {
+						newData, err := strconv.ParseInt(dataVal, 10, 32)
+						if err != nil {
+							return nil, errors.Wrapf(err, "failed parsing the data part of enum value '%s'", value)
+						}
+						data = int(newData)
+						value = value[:equalIndex]
+					} else {
+						value = strings.TrimSuffix(value, `=`)
+						fmt.Printf("Ignoring enum with '=' but no value after: %s\n", value)
 					}
-					data = int(newData)
-					value = value[:equalIndex]
-				} else {
-					value = strings.TrimSuffix(value, `=`)
-					fmt.Printf("Ignoring enum with '=' but no value after: %s\n", value)
 				}
-			}
-			rawName := strings.TrimSpace(value)
-			name := strings.Title(rawName)
-			prefixedName := name
-			if name != skipHolder {
-				prefixedName = enum.Prefix + name
-				prefixedName = sanitizeValue(prefixedName)
-				if !g.leaveSnakeCase {
-					prefixedName = snakeToCamelCase(prefixedName)
+				rawName := strings.TrimSpace(value)
+				name := strings.Title(rawName)
+				prefixedName := name
+				if name != skipHolder {
+					prefixedName = enum.Prefix + name
+					prefixedName = sanitizeValue(prefixedName)
+					if !g.leaveSnakeCase {
+						prefixedName = snakeToCamelCase(prefixedName)
+					}
 				}
+				ev = EnumValue{Name: name, RawName: rawName, PrefixedName: prefixedName, Value: data, Comment: comment}
+				enum.Values = append(enum.Values, ev)
+				data++
 			}
-
-			ev := EnumValue{Name: name, RawName: rawName, PrefixedName: prefixedName, Value: data, Comment: comment}
-			enum.Values = append(enum.Values, ev)
-			data++
+		} else {
+			if value != ")" {
+				splitValue := strings.Split(value, " ")
+				rawName := strings.TrimSpace(splitValue[0])
+				name := strings.Title(rawName)
+				prefixedName := name
+				if name != skipHolder {
+					prefixedName = enum.Prefix + name
+					prefixedName = sanitizeValue(prefixedName)
+					if !g.leaveSnakeCase {
+						prefixedName = snakeToCamelCase(prefixedName)
+					}
+				}
+				ev = EnumValue{Name: name, RawName: rawName, PrefixedName: prefixedName, Value: data, StringValue: splitValue[1]}
+				enum.Values = append(enum.Values, ev)
+				data++
+			}
 		}
+
 	}
 
 	// fmt.Printf("###\nENUM: %+v\n###\n", enum)
@@ -437,7 +470,7 @@ func snakeToCamelCase(value string) string {
 // getEnumDeclFromComments parses the array of comment strings and creates a single Enum Declaration statement
 // that is easier to deal with for the remainder of parsing.  It turns multi line declarations and makes a single
 // string declaration.
-func getEnumDeclFromComments(comments []*ast.Comment) string {
+func (g Generator) getEnumDeclFromComments(comments []*ast.Comment) string {
 	parts := []string{}
 	store := false
 
@@ -451,7 +484,7 @@ func getEnumDeclFromComments(comments []*ast.Comment) string {
 	// Go over all the lines in this comment block
 	for _, line := range lines {
 		if store {
-			paramLevel, trimmed := parseLinePart(line)
+			paramLevel, trimmed := g.parseLinePart(line)
 			if trimmed != "" {
 				parts = append(parts, trimmed)
 			}
@@ -467,7 +500,7 @@ func getEnumDeclFromComments(comments []*ast.Comment) string {
 			if startIndex >= 0 {
 				line = line[startIndex+len(`ENUM(`):]
 			}
-			paramLevel, trimmed := parseLinePart(line)
+			paramLevel, trimmed := g.parseLinePart(line)
 			if trimmed != "" {
 				parts = append(parts, trimmed)
 			}
@@ -488,15 +521,17 @@ func getEnumDeclFromComments(comments []*ast.Comment) string {
 	return joined
 }
 
-func parseLinePart(line string) (paramLevel int, trimmed string) {
+func (g Generator) parseLinePart(line string) (paramLevel int, trimmed string) {
 	trimmed = line
-	comment := ""
-	if idx := strings.Index(line, parseCommentPrefix); idx >= 0 {
-		trimmed = line[:idx]
-		comment = "//" + url.QueryEscape(strings.TrimSpace(line[idx+2:]))
+	if !g.stringValues {
+		comment := ""
+		if idx := strings.Index(line, parseCommentPrefix); idx >= 0 {
+			trimmed = line[:idx]
+			comment = "//" + url.QueryEscape(strings.TrimSpace(line[idx+2:]))
+		}
+		trimmed = trimAllTheThings(trimmed)
+		trimmed += comment
 	}
-	trimmed = trimAllTheThings(trimmed)
-	trimmed += comment
 	opens := strings.Count(line, `(`)
 	closes := strings.Count(line, `)`)
 	if opens > 0 {
